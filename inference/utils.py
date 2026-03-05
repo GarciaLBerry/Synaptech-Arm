@@ -1,42 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import List
 import joblib, sklearn
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split
+from config import default_cols
 
 from pathlib import Path
-
-
-###### Utils Variables ######
-default_cols = {
-    0: "Sample Index",
-    1: "EXG Channel 0",
-    2: "EXG Channel 1",
-    3: "EXG Channel 2",
-    4: "EXG Channel 3",
-    5: "EXG Channel 4",
-    6: "EXG Channel 5",
-    7: "EXG Channel 6",
-    8: "EXG Channel 7",
-    9: "Accel Channel 0",
-    10: "Accel Channel 1",
-    11: "Accel Channel 2",
-    12: "Not Used",
-    13: "Digital Channel 0 (D11)",
-    14: "Digital Channel 1 (D12)",
-    15: "Digital Channel 2 (D13)",
-    16: "Digital Channel 3 (D17)",
-    17: "Not Used",
-    18: "Digital Channel 4 (D18)",
-    19: "Analog Channel 0",
-    20: "Analog Channel 1",
-    21: "Analog Channel 2",
-    22: "Timestamp",
-    23: "Marker Channel",
-    24: "Timestamp (Formatted)"
-}
-
 
 ###### Model Saveing I/O ######
 def save_model(
@@ -98,6 +70,11 @@ def format_data(data: pd.DataFrame) -> pd.DataFrame:
     data = data.rename(columns = default_cols)
     
     return data
+
+def get_split_data(data: pd.DataFrame, label_col: str = "Label", test_size: float = 0.2, random_state: int = 42) -> List[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
+    x = data.drop(columns=[label_col])
+    y = data[label_col]
+    return train_test_split(x, y, test_size=test_size, random_state=random_state)
 
 def debug_print_dataset_details(dataset: pd.DataFrame) -> None:
     lowest = dataset.iloc[0, 22]
