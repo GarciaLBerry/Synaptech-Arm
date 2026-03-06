@@ -78,6 +78,8 @@ def format_csv_data(data: pd.DataFrame) -> pd.DataFrame:
     pd.set_option('display.max_columns', None)
     data = data.astype(float)
     data = data.rename(columns=default_cols)
+    
+    # TODO: Make this more robust and not fully fail if any of the expected columns are missing - Likely just for loop dropping one column at a time.
     data = data.drop(dropped_cols, axis=1)
     return data
 
