@@ -19,22 +19,22 @@ def main():
         while True:
             # 3. Check if the buffer has data
             raw_signal = streamer.pop_signal()
-            if raw_signal:
-                
+            if raw_signal is not None:
+
                 # 4. Pass to the separate prediction function
                 results = predict(raw_signal)
                 if type(results) is np.ndarray:
                     result = results[0]
                 else:
                     result = int(results) 
-                    
+
                 
                 # 5. Placeholder: Translate and print output
                 if result not in prediction_mapping:
                     display_text = "UNKNOWN SIGNAL"
                 else:
                     display_text = prediction_mapping[result]
-                    
+
                 print(f"Action: {display_text}", end='\r')
                 time.sleep(0.1)
 
