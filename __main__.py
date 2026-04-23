@@ -15,8 +15,11 @@ def main():
     signal_thread.start()
     
     try:
+        timeout_counter = 0
         # 2. Start the main loop to process signals
         while True:
+            if timeout_counter >= 100:
+                break
             # 3. Check if the buffer has data
             raw_signal = streamer.pop_signal()
             if raw_signal is not None:
@@ -36,7 +39,11 @@ def main():
                     display_text = prediction_mapping[result]
 
                 print(f"Action: {display_text}", end='\r')
-                time.sleep(0.1)
+                timeout_counter = 0
+                
+            else: timeout_counter += 1
+            
+            time.sleep(0.1)
 
     except KeyboardInterrupt:
         # This catches Ctrl+C/Cmd+C gracefully
@@ -44,6 +51,10 @@ def main():
         streamer.stop_streaming()
         signal_thread.join()
         exit(0)
+    
+    streamer.stop_streaming()
+    signal_thread.join()
+    exit(0)
 
 if __name__ == "__main__":
     main()

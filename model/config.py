@@ -43,6 +43,9 @@ dropped_cols = [
     "EXG Channel 5",
     "EXG Channel 6",
     "EXG Channel 7",
+    "Accel Channel 0",
+    "Accel Channel 1",
+    "Accel Channel 2",
     "Not Used",
     "Digital Channel 0 (D11)",
     "Digital Channel 1 (D12)",
@@ -53,6 +56,18 @@ dropped_cols = [
     "Analog Channel 0",
     "Analog Channel 1",
     "Analog Channel 2"
+]
+
+core_cols = [
+    "EXG Channel 0",
+    "EXG Channel 1",
+    "EXG Channel 2",
+    "EXG Channel 3",
+    "EXG Channel 4",
+    "Accel Channel 0",  # TODO: Remove this channel when next model is trained without
+    "Accel Channel 1",  # TODO: Remove this channel when next model is trained without
+    "Accel Channel 2",  # TODO: Remove this channel when next model is trained without
+    "Timestamp"
 ]
 
 param_dist = {

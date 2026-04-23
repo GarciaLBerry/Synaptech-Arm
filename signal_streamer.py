@@ -1,12 +1,15 @@
 import queue
 import time
 import numpy as np
+import pandas as pd
+
 from pylsl import resolve_streams, StreamInlet
+from model.config import core_cols
 
 SAMPLE_RATE = 250
 WINDOW_SIZE = 250
 CHANNEL_NUM = 8
-STREAM_TIMEOUT = 1
+STREAM_TIMEOUT = 1.01
 verbose = False
 get_timeout = 0.1
 
@@ -25,10 +28,21 @@ class SignalStreamer:
             inlet = StreamInlet(eeg_streams[0])
             print("Connected to LSL stream:", eeg_streams[0].name())
             while not self._stop_signal:
-                sample, timestamp = inlet.pull_chunk(STREAM_TIMEOUT, int(WINDOW_SIZE))
-                signal = np.array(sample, dtype=np.float32)
-                assert signal.shape[0] == WINDOW_SIZE
-                self._signal_buffer.put(signal)
+                samples, ts = inlet.pull_chunk(STREAM_TIMEOUT, int(WINDOW_SIZE))
+                signals = np.array(samples, dtype=np.float32)
+                
+                # Replace final 3 columns with default accelerometer values
+                accel_defaults = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+                signals[:, -3:] = accel_defaults
+                # TODO: We probably want to just drop the accelerometer values in the future models instead
+
+                timestamps = np.array(ts, dtype=np.float64).reshape(-1, 1)
+                
+                extended_samples = np.hstack((timestamps, signals))
+                assert extended_samples.shape[0] == WINDOW_SIZE
+
+                df = pd.DataFrame(extended_samples, columns=core_cols)
+                self._signal_buffer.put(df)
                 time.sleep(1)  # Simulate delay between signals
         except KeyboardInterrupt:
             # This catches Ctrl+C/Cmd+C gracefully
