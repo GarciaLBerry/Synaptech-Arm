@@ -64,22 +64,19 @@ core_cols = [
     "EXG Channel 2",
     "EXG Channel 3",
     "EXG Channel 4",
-    "Accel Channel 0",  # TODO: Remove this channel when next model is trained without
-    "Accel Channel 1",  # TODO: Remove this channel when next model is trained without
-    "Accel Channel 2",  # TODO: Remove this channel when next model is trained without
     "Timestamp"
 ]
 
 param_dist = {
-    #'wave__wavelet': ['db4'],
-    #'wave__level': [4],
+    'wave__wavelet': ['db4'],
+    'wave__level': [4, 5, 6],
     'model__C': loguniform(1e-4, 1e2),
     'model__l1_ratio': uniform(0, 1),
     'model__max_iter': randint(400, 500)
 }
 
 pipeline: Pipeline = Pipeline([
-    #("wave", WaveletTransformer(wavelet='db4', level=4)),
+    ("wave", WaveletTransformer()),
     ("model", LogisticRegression(solver="saga", tol=1e-3))
 ])
 
@@ -87,3 +84,13 @@ default_pipelines_path: str = "./model/pipelines"
 version_prefix: str = "version="
 version_width: int = 3
 pipeline_prefix = "pipeline_v"
+
+#----------- main globals -----------#
+# Seconds without recieving signal to automatically exit.
+MAIN_LOOP_TIMEOUT = 30
+# Seconds in between loops
+MAIN_LOOP_DELAY = 0.25
+
+#----------- signal globals -----------#
+# Rows in each packet
+PACKET_SIZE = 250

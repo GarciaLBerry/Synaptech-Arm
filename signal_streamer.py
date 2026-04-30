@@ -4,14 +4,16 @@ import numpy as np
 import pandas as pd
 
 from pylsl import resolve_streams, StreamInlet
-from model.config import core_cols
+from model.config import PACKET_SIZE
 
 SAMPLE_RATE = 250
-WINDOW_SIZE = 250
 CHANNEL_NUM = 8
-STREAM_TIMEOUT = 1.01
+
+packet_duration = SAMPLE_RATE / PACKET_SIZE
+stream_timeout = packet_duration + 0.01
+signal_buffer_get_timeout = packet_duration * 0.1
+
 verbose = False
-get_timeout = 0.1
 
 class SignalStreamer:
     _signal_buffer = queue.SimpleQueue()
@@ -28,22 +30,15 @@ class SignalStreamer:
             inlet = StreamInlet(eeg_streams[0])
             print("Connected to LSL stream:", eeg_streams[0].name())
             while not self._stop_signal:
-                samples, ts = inlet.pull_chunk(STREAM_TIMEOUT, int(WINDOW_SIZE))
+                samples, ts = inlet.pull_chunk(stream_timeout, int(PACKET_SIZE))
                 signals = np.array(samples, dtype=np.float32)
-                
-                # Replace final 3 columns with default accelerometer values
-                accel_defaults = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-                signals[:, -3:] = accel_defaults
-                # TODO: We probably want to just drop the accelerometer values in the future models instead
-
                 timestamps = np.array(ts, dtype=np.float64).reshape(-1, 1)
-                
                 extended_samples = np.hstack((timestamps, signals))
-                assert extended_samples.shape[0] == WINDOW_SIZE
+                
+                assert extended_samples.shape[0] == PACKET_SIZE
 
-                df = pd.DataFrame(extended_samples, columns=core_cols)
-                self._signal_buffer.put(df)
-                time.sleep(1)  # Simulate delay between signals
+                self._signal_buffer.put(extended_samples.T[None, :, :])
+                
         except KeyboardInterrupt:
             # This catches Ctrl+C/Cmd+C gracefully
             print("\n\nLoop stopped by user. Closing down...")
@@ -53,7 +48,7 @@ class SignalStreamer:
 
     def pop_signal(self):
         try:
-            return self._signal_buffer.get(block=False, timeout=get_timeout)
+            return self._signal_buffer.get(block=False, timeout=signal_buffer_get_timeout)
         except queue.Empty:
             if verbose:
                 print("[SIGNAL STREAMER] No signals in buffer.")
