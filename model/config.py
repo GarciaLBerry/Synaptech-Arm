@@ -1,3 +1,5 @@
+from cProfile import label
+
 from sklearn.linear_model import LogisticRegression
 from scipy.stats import  loguniform, uniform, randint
 from sklearn.pipeline import Pipeline
@@ -87,3 +89,5 @@ default_pipelines_path: str = "./model/pipelines"
 version_prefix: str = "version="
 version_width: int = 3
 pipeline_prefix = "pipeline_v"
+window_size = 250
+label_col = "Marker Channel"

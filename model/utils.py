@@ -5,7 +5,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 
-from .config import default_pipelines_path, pipeline_prefix, version_prefix, version_width, default_cols, dropped_cols
+from .config import default_pipelines_path, pipeline_prefix, version_prefix, version_width, default_cols, dropped_cols, window_size
 
 ###### pipeline Saveing I/O ######
 def save_pipeline(
@@ -70,9 +70,17 @@ def load_latest_pipeline(cwd: str | Path | None = None) -> Pipeline:
 
 
 ###### Data Loading and Formatting ######
+def get_data(dataset_path: str, label_col: str = "Marker Channel", test_size: float = 0.2, random_state: int = 42) -> pd.DataFrame:
+    data = read_dataset_from_csv(dataset_path)
+    data = format_csv_data(data)
+    x = data.drop(columns=[label_col])
+    y = data[label_col]
+    y = extend_labels(data)
+    x, y = packetize_data(x, y)
+    return train_test_split(x, y, test_size=test_size, random_state=random_state)
+
 def read_dataset_from_csv(filePath: str) -> pd.DataFrame:
-    data = pd.read_csv(filePath, sep="\t", header=None)
-    return format_csv_data(data)
+    return pd.read_csv(filePath, sep="\t", header=None)
 
 def format_csv_data(data: pd.DataFrame) -> pd.DataFrame:
     pd.set_option('display.max_columns', None)
@@ -83,22 +91,7 @@ def format_csv_data(data: pd.DataFrame) -> pd.DataFrame:
     data = data.drop(dropped_cols, axis=1)
     return data
 
-def get_split_data(data: pd.DataFrame, label_col: str = "Marker Channel", test_size: float = 0.2, random_state: int = 42) -> list:
-    x = data.drop(columns=[label_col])
-    # TODO: Determine how the labels should actually be determined and replace this temp debug function
-    y = debug_extend_labels(data)
-    return train_test_split(x, y, test_size=test_size, random_state=random_state)
-
-
-def debug_print_dataset_details(dataset: pd.DataFrame) -> None:
-    lowest = dataset.iloc[0, 22]
-    # TODO: Investigate and fix type complaint about the following line instead of just using a type ignore comment. 
-    dataset['Timestamp'] = dataset['Timestamp'] - lowest # type: ignore
-    dataset['Label'] = (round(dataset['Timestamp'], 0) % 10) >= 5
-    print(dataset)
-
-# Temporary debug function only created to allow me to train a model with more than 3 labels per class
-def debug_extend_labels(data: pd.DataFrame) -> pd.Series:
+def extend_labels(data: pd.DataFrame) -> pd.Series:
     column_name = "Marker Channel"
     new_column = data[column_name].copy()
     
@@ -117,6 +110,42 @@ def debug_extend_labels(data: pd.DataFrame) -> pd.Series:
     #data[column_name] = new_column
     return new_column
 
+def packetize_data(x: pd.DataFrame, y: pd.Series, packet_size: int = window_size) -> tuple[pd.DataFrame, pd.Series]:
+    """
+    Partitions the input data into packets of a specified size.
+    Args:
+        x (pd.DataFrame): The input features DataFrame.
+        y (pd.Series): The labels Series corresponding to the input features.
+        packet_size (int, optional): The size of each packet. Defaults to window_size.
+
+    Returns:
+        tuple[pd.DataFrame, pd.Series]: The packetized data. 
+        The first element is a DataFrame where each row corresponds to a packet of features, which is a flattened version of the original features in that packet.
+        The second element is a Series where each entry corresponds to the label for the respective packet, which is the most common label in that packet.
+    """
+    num_packets = len(x) // packet_size
+    x_packetized = []
+    y_packetized = []
+    
+    for i in range(num_packets):
+        start_idx = i * packet_size
+        end_idx = start_idx + packet_size
+        
+        # Extract the packet of features and labels
+        x_packet = x.iloc[start_idx:end_idx].values.flatten()  # Flatten the features in the packet
+        y_packet = y.iloc[start_idx:end_idx].mode()[0]  # Use the most common label in the packet
+        
+        x_packetized.append(x_packet)
+        y_packetized.append(y_packet)
+    
+    return pd.DataFrame(x_packetized), pd.Series(y_packetized)
+
+def debug_print_dataset_details(dataset: pd.DataFrame) -> None:
+    lowest = dataset.iloc[0, 22]
+    # TODO: Investigate and fix type complaint about the following line instead of just using a type ignore comment. 
+    dataset['Timestamp'] = dataset['Timestamp'] - lowest # type: ignore
+    dataset['Label'] = (round(dataset['Timestamp'], 0) % 10) >= 5
+    print(dataset)
 
 ###### File Helper Functions ######
 def _find_version_file() -> Path:

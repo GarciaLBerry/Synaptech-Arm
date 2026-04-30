@@ -4,10 +4,9 @@ import numpy as np
 import pandas as pd
 
 from pylsl import resolve_streams, StreamInlet
-from model.config import core_cols
+from model.config import core_cols, window_size
 
 SAMPLE_RATE = 250
-WINDOW_SIZE = 250
 CHANNEL_NUM = 8
 STREAM_TIMEOUT = 1.01
 verbose = False
@@ -28,7 +27,7 @@ class SignalStreamer:
             inlet = StreamInlet(eeg_streams[0])
             print("Connected to LSL stream:", eeg_streams[0].name())
             while not self._stop_signal:
-                samples, ts = inlet.pull_chunk(STREAM_TIMEOUT, int(WINDOW_SIZE))
+                samples, ts = inlet.pull_chunk(STREAM_TIMEOUT, int(window_size))
                 signals = np.array(samples, dtype=np.float32)
                 
                 # Replace final 3 columns with default accelerometer values
@@ -39,7 +38,7 @@ class SignalStreamer:
                 timestamps = np.array(ts, dtype=np.float64).reshape(-1, 1)
                 
                 extended_samples = np.hstack((timestamps, signals))
-                assert extended_samples.shape[0] == WINDOW_SIZE
+                assert extended_samples.shape[0] == window_size
 
                 df = pd.DataFrame(extended_samples, columns=core_cols)
                 self._signal_buffer.put(df)
