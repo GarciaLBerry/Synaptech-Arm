@@ -1,7 +1,6 @@
 import pywt
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
-#from scipy import welch
 
 class WaveletTransformer(BaseEstimator, TransformerMixin):
     def __init__(self, wavelet='db4', level=4, mode="symmetric"):

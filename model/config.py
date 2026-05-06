@@ -3,6 +3,7 @@ from cProfile import label
 from sklearn.linear_model import LogisticRegression
 from scipy.stats import  loguniform, uniform, randint
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 from preprocessing.custom_transformers import WaveletTransformer
 
 dataset_path = "Evo_Initial_BCI_Data/2026-27-01_Evo_Run04_FiveSets_Gain12.csv"
@@ -73,7 +74,7 @@ core_cols = [
 
 param_dist = {
     'wave__wavelet': ['db4'],
-    'wave__level': [4, 5, 6],
+    'wave__level': [4, 5],
     'model__C': loguniform(1e-4, 1e2),
     'model__l1_ratio': uniform(0, 1),
     'model__max_iter': randint(400, 500)
@@ -81,6 +82,7 @@ param_dist = {
 
 pipeline: Pipeline = Pipeline([
     ("wave", WaveletTransformer()),
+    ("scaler", StandardScaler()),
     ("model", LogisticRegression(solver="saga", tol=1e-3))
 ])
 
