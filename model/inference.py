@@ -12,7 +12,7 @@ def predict(x_test, y_test = None, evaluate = False):
     if evaluate and (y_test is None):
         data = utils.read_dataset_from_csv(config.dataset_path)
         #utils.debug_print_dataset_details(data)
-        _, _, _, y_test = utils.get_split_data(data)
+        _, _, _, y_test = utils.process_data(data)
         
     if verbose:
         print(f"Predictions: {predictions[0]}")

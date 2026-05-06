@@ -1,3 +1,5 @@
+from cProfile import label
+
 from sklearn.linear_model import LogisticRegression
 from scipy.stats import  loguniform, uniform, randint
 from sklearn.pipeline import Pipeline
@@ -10,6 +12,8 @@ prediction_mapping = {
     2:  "REST",
     3:  "UP"
 }
+
+label_col = "Marker Channel"
 
 default_cols = {
     0: "Sample Index",

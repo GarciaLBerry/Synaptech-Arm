@@ -9,10 +9,8 @@ from . import utils
 def train(dataset_path = ""):
     assert dataset_path, "Dataset path must be provided for training."
     
-    data = utils.read_dataset_from_csv(dataset_path)
-    #utils.debug_print_dataset_details(data)
-    x_train, x_test, y_train, y_test = utils.get_split_data(data)
-    
+    x_train, x_test, y_train, y_test = utils.get_data(dataset_path)
+
     tuner = RandomizedSearchCV(
         estimator=pipeline,
         param_distributions=param_dist,
