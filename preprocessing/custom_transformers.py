@@ -24,7 +24,7 @@ class WaveletTransformer(BaseEstimator, TransformerMixin):
                 coeffs = pywt.wavedec(X[i, ch, :], self.wavelet, level=self.level, mode=self.mode)
                 
                 # energy per component
-                out.extend([np.sum(c * c) for c in coeffs[1:-1]])
+                out.extend([np.sum(c * c) for c in coeffs[1:]])
 
             features[i, :] = np.log1p(out)
         return features

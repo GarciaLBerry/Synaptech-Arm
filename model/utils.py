@@ -61,7 +61,7 @@ def load_pipeline(pipeline_version: int, cwd: str | Path | None = None) -> Pipel
     if numpy_version and numpy_version != np.__version__:
         warnings.warn(f"WARNING: Loaded pipeline was trained with numpy version {numpy_version}, but current version is {np.__version__}. This may cause compatibility issues.")
     
-    return bundle["model"]
+    return bundle["pipeline"]
 
 def load_latest_pipeline(cwd: str | Path | None = None) -> Pipeline:
     version_int = _get_latest_pipeline_version(cwd)

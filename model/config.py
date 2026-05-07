@@ -60,7 +60,8 @@ dropped_cols = [
     "Digital Channel 4 (D18)",
     "Analog Channel 0",
     "Analog Channel 1",
-    "Analog Channel 2"
+    "Analog Channel 2",
+    "Timestamp"
 ]
 
 core_cols = [
@@ -68,8 +69,7 @@ core_cols = [
     "EXG Channel 1",
     "EXG Channel 2",
     "EXG Channel 3",
-    "EXG Channel 4",
-    "Timestamp"
+    "EXG Channel 4"
 ]
 
 param_dist = {

@@ -4,10 +4,11 @@ import numpy as np
 import pandas as pd
 
 from pylsl import resolve_streams, StreamInlet
-from model.config import PACKET_SIZE
+from model.config import PACKET_SIZE, core_cols
 
 SAMPLE_RATE = 250
 CHANNEL_NUM = 8
+MODEL_CHANNEL_NUM = len(core_cols)
 
 packet_duration = SAMPLE_RATE / PACKET_SIZE
 stream_timeout = packet_duration + 0.01
@@ -28,16 +29,24 @@ class SignalStreamer:
                 raise RuntimeError("No EEG streams found. Make sure OpenBCI GUI or CLI is streaming!")
 
             inlet = StreamInlet(eeg_streams[0])
+            inlet.flush()
             print("Connected to LSL stream:", eeg_streams[0].name())
             while not self._stop_signal:
-                samples, ts = inlet.pull_chunk(stream_timeout, int(PACKET_SIZE))
+                samples, _ = inlet.pull_chunk(stream_timeout, int(PACKET_SIZE))
                 signals = np.array(samples, dtype=np.float32)
-                timestamps = np.array(ts, dtype=np.float64).reshape(-1, 1)
-                extended_samples = np.hstack((timestamps, signals))
                 
-                assert extended_samples.shape[0] == PACKET_SIZE
+                if signals.shape[0] > PACKET_SIZE:
+                    if verbose:
+                        print(f"[SIGNAL STREAMER] Warning: Received {signals.shape[0]} samples, expected {PACKET_SIZE}. Trimming to expected size.\n")
+                    signals = signals[:PACKET_SIZE, :]
+                
+                if signals.shape[0] < PACKET_SIZE:
+                    if verbose:
+                        print(f"[SIGNAL STREAMER] Warning: Received {signals.shape[0]} samples, expected {PACKET_SIZE}. Unable to correct.\n")
+                
 
-                self._signal_buffer.put(extended_samples.T[None, :, :])
+                signals = signals[:, :5]
+                self._signal_buffer.put(signals.T[None, :, :])
                 
         except KeyboardInterrupt:
             # This catches Ctrl+C/Cmd+C gracefully

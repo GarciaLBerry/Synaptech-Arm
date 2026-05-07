@@ -1,4 +1,4 @@
-import threading, os, time
+import threading, os, shutil, time
 from pathlib import Path
 from model.inference import predict
 import signal_streamer as ss
@@ -39,7 +39,8 @@ def main():
                 else:
                     display_text = prediction_mapping[result]
 
-                print(f"Action: {display_text}; Timeout: [{timeout_counter}]", end='\r')
+                status = f"Action: {display_text}; Timeout: [{timeout_counter}]"
+                print(status.ljust(shutil.get_terminal_size().columns), end='\r', flush=True)
                 timeout_counter = 0
                 
                 
