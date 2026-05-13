@@ -10,9 +10,7 @@ def predict(x_test, y_test = None, evaluate = False):
     predictions = model.predict(x_test)
     
     if evaluate and (y_test is None):
-        data = utils.read_dataset_from_csv(config.dataset_path)
-        #utils.debug_print_dataset_details(data)
-        _, _, _, y_test = utils.process_data(data)
+        _, _, _, y_test = utils.get_data(config.dataset_path)
         
     if verbose:
         print(f"Predictions: {predictions[0]}")

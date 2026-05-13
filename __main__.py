@@ -1,9 +1,10 @@
-import threading, os, time
+import threading, os, shutil, time
 from pathlib import Path
 from model.inference import predict
 import signal_streamer as ss
 import numpy as np
 from model import prediction_mapping
+from model.config import MAIN_LOOP_DELAY, MAIN_LOOP_TIMEOUT
 
 def main():
     if Path.cwd() != Path(__file__).parent:
@@ -18,7 +19,7 @@ def main():
         timeout_counter = 0
         # 2. Start the main loop to process signals
         while True:
-            if timeout_counter >= 100:
+            if timeout_counter >= MAIN_LOOP_TIMEOUT:
                 break
             # 3. Check if the buffer has data
             raw_signal = streamer.pop_signal()
@@ -38,12 +39,13 @@ def main():
                 else:
                     display_text = prediction_mapping[result]
 
-                print(f"Action: {display_text}", end='\r')
+                status = f"Action: {display_text}; Timeout: [{timeout_counter}]"
+                print(status.ljust(shutil.get_terminal_size().columns), end='\r', flush=True)
                 timeout_counter = 0
                 
-            else: timeout_counter += 1
-            
-            time.sleep(0.1)
+                
+            timeout_counter += MAIN_LOOP_DELAY
+            time.sleep(MAIN_LOOP_DELAY)
 
     except KeyboardInterrupt:
         # This catches Ctrl+C/Cmd+C gracefully

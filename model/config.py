@@ -3,6 +3,7 @@ from cProfile import label
 from sklearn.linear_model import LogisticRegression
 from scipy.stats import  loguniform, uniform, randint
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 from preprocessing.custom_transformers import WaveletTransformer
 
 dataset_path = "Evo_Initial_BCI_Data/2026-27-01_Evo_Run04_FiveSets_Gain12.csv"
@@ -12,6 +13,8 @@ prediction_mapping = {
     2:  "REST",
     3:  "UP"
 }
+
+label_col = "Marker Channel"
 
 default_cols = {
     0: "Sample Index",
@@ -57,7 +60,8 @@ dropped_cols = [
     "Digital Channel 4 (D18)",
     "Analog Channel 0",
     "Analog Channel 1",
-    "Analog Channel 2"
+    "Analog Channel 2",
+    "Timestamp"
 ]
 
 core_cols = [
@@ -65,23 +69,20 @@ core_cols = [
     "EXG Channel 1",
     "EXG Channel 2",
     "EXG Channel 3",
-    "EXG Channel 4",
-    "Accel Channel 0",  # TODO: Remove this channel when next model is trained without
-    "Accel Channel 1",  # TODO: Remove this channel when next model is trained without
-    "Accel Channel 2",  # TODO: Remove this channel when next model is trained without
-    "Timestamp"
+    "EXG Channel 4"
 ]
 
 param_dist = {
-    #'wave__wavelet': ['db4'],
-    #'wave__level': [4],
+    'wave__wavelet': ['db4'],
+    'wave__level': [4, 5],
     'model__C': loguniform(1e-4, 1e2),
     'model__l1_ratio': uniform(0, 1),
     'model__max_iter': randint(400, 500)
 }
 
 pipeline: Pipeline = Pipeline([
-    #("wave", WaveletTransformer(wavelet='db4', level=4)),
+    ("wave", WaveletTransformer()),
+    ("scaler", StandardScaler()),
     ("model", LogisticRegression(solver="saga", tol=1e-3))
 ])
 
@@ -89,5 +90,13 @@ default_pipelines_path: str = "./model/pipelines"
 version_prefix: str = "version="
 version_width: int = 3
 pipeline_prefix = "pipeline_v"
-window_size = 250
-label_col = "Marker Channel"
+
+#----------- main globals -----------#
+# Seconds without recieving signal to automatically exit.
+MAIN_LOOP_TIMEOUT = 30
+# Seconds in between loops
+MAIN_LOOP_DELAY = 0.25
+
+#----------- signal globals -----------#
+# Rows in each packet
+PACKET_SIZE = 250

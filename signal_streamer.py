@@ -4,13 +4,17 @@ import numpy as np
 import pandas as pd
 
 from pylsl import resolve_streams, StreamInlet
-from model.config import core_cols, window_size
+from model.config import PACKET_SIZE, core_cols
 
 SAMPLE_RATE = 250
 CHANNEL_NUM = 8
-STREAM_TIMEOUT = 1.01
+MODEL_CHANNEL_NUM = len(core_cols)
+
+packet_duration = SAMPLE_RATE / PACKET_SIZE
+stream_timeout = packet_duration + 0.01
+signal_buffer_get_timeout = packet_duration * 0.1
+
 verbose = False
-get_timeout = 0.1
 
 class SignalStreamer:
     _signal_buffer = queue.SimpleQueue()
@@ -25,24 +29,25 @@ class SignalStreamer:
                 raise RuntimeError("No EEG streams found. Make sure OpenBCI GUI or CLI is streaming!")
 
             inlet = StreamInlet(eeg_streams[0])
+            inlet.flush()
             print("Connected to LSL stream:", eeg_streams[0].name())
             while not self._stop_signal:
-                samples, ts = inlet.pull_chunk(STREAM_TIMEOUT, int(window_size))
+                samples, _ = inlet.pull_chunk(stream_timeout, int(PACKET_SIZE))
                 signals = np.array(samples, dtype=np.float32)
                 
-                # Replace final 3 columns with default accelerometer values
-                accel_defaults = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-                signals[:, -3:] = accel_defaults
-                # TODO: We probably want to just drop the accelerometer values in the future models instead
-
-                timestamps = np.array(ts, dtype=np.float64).reshape(-1, 1)
+                if signals.shape[0] > PACKET_SIZE:
+                    if verbose:
+                        print(f"[SIGNAL STREAMER] Warning: Received {signals.shape[0]} samples, expected {PACKET_SIZE}. Trimming to expected size.\n")
+                    signals = signals[:PACKET_SIZE, :]
                 
-                extended_samples = np.hstack((timestamps, signals))
-                assert extended_samples.shape[0] == window_size
+                if signals.shape[0] < PACKET_SIZE:
+                    if verbose:
+                        print(f"[SIGNAL STREAMER] Warning: Received {signals.shape[0]} samples, expected {PACKET_SIZE}. Unable to correct.\n")
+                
 
-                df = pd.DataFrame(extended_samples, columns=core_cols)
-                self._signal_buffer.put(df)
-                time.sleep(1)  # Simulate delay between signals
+                signals = signals[:, :5]
+                self._signal_buffer.put(signals.T[None, :, :])
+                
         except KeyboardInterrupt:
             # This catches Ctrl+C/Cmd+C gracefully
             print("\n\nLoop stopped by user. Closing down...")
@@ -52,7 +57,7 @@ class SignalStreamer:
 
     def pop_signal(self):
         try:
-            return self._signal_buffer.get(block=False, timeout=get_timeout)
+            return self._signal_buffer.get(block=False, timeout=signal_buffer_get_timeout)
         except queue.Empty:
             if verbose:
                 print("[SIGNAL STREAMER] No signals in buffer.")

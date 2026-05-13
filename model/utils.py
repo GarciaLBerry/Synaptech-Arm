@@ -5,7 +5,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 
-from .config import default_pipelines_path, pipeline_prefix, version_prefix, version_width, default_cols, dropped_cols, window_size
+from .config import default_pipelines_path, pipeline_prefix, version_prefix, version_width, default_cols, dropped_cols, PACKET_SIZE
 
 ###### pipeline Saveing I/O ######
 def save_pipeline(
@@ -61,7 +61,7 @@ def load_pipeline(pipeline_version: int, cwd: str | Path | None = None) -> Pipel
     if numpy_version and numpy_version != np.__version__:
         warnings.warn(f"WARNING: Loaded pipeline was trained with numpy version {numpy_version}, but current version is {np.__version__}. This may cause compatibility issues.")
     
-    return bundle["model"]
+    return bundle["pipeline"]
 
 def load_latest_pipeline(cwd: str | Path | None = None) -> Pipeline:
     version_int = _get_latest_pipeline_version(cwd)
@@ -70,9 +70,10 @@ def load_latest_pipeline(cwd: str | Path | None = None) -> Pipeline:
 
 
 ###### Data Loading and Formatting ######
-def get_data(dataset_path: str, label_col: str = "Marker Channel", test_size: float = 0.2, random_state: int = 42) -> pd.DataFrame:
+def get_data(dataset_path: str, label_col: str = "Marker Channel", test_size: float = 0.2, random_state: int = 42) -> list[np.ndarray]:
     data = read_dataset_from_csv(dataset_path)
     data = format_csv_data(data)
+    data = drop_leading_bad_rows(data, label_col)
     x = data.drop(columns=[label_col])
     y = data[label_col]
     y = extend_labels(data)
@@ -110,7 +111,7 @@ def extend_labels(data: pd.DataFrame) -> pd.Series:
     #data[column_name] = new_column
     return new_column
 
-def packetize_data(x: pd.DataFrame, y: pd.Series, packet_size: int = window_size) -> tuple[pd.DataFrame, pd.Series]:
+def packetize_data(x: pd.DataFrame, y: pd.Series) -> tuple[np.ndarray, np.ndarray]:
     """
     Partitions the input data into packets of a specified size.
     Args:
@@ -119,26 +120,60 @@ def packetize_data(x: pd.DataFrame, y: pd.Series, packet_size: int = window_size
         packet_size (int, optional): The size of each packet. Defaults to window_size.
 
     Returns:
-        tuple[pd.DataFrame, pd.Series]: The packetized data. 
-        The first element is a DataFrame where each row corresponds to a packet of features, which is a flattened version of the original features in that packet.
-        The second element is a Series where each entry corresponds to the label for the respective packet, which is the most common label in that packet.
+        tuple[np.ndarray, np.ndarray]: The packetized data.
+        The first element is an array where each row corresponds to a packet of features, which is a flattened version of the original features in that packet.
+        The second element is an array where each entry corresponds to the label for the respective packet, which is the most common label in that packet.
     """
-    num_packets = len(x) // packet_size
-    x_packetized = []
-    y_packetized = []
-    
-    for i in range(num_packets):
-        start_idx = i * packet_size
-        end_idx = start_idx + packet_size
-        
-        # Extract the packet of features and labels
-        x_packet = x.iloc[start_idx:end_idx].values.flatten()  # Flatten the features in the packet
-        y_packet = y.iloc[start_idx:end_idx].mode()[0]  # Use the most common label in the packet
-        
-        x_packetized.append(x_packet)
-        y_packetized.append(y_packet)
-    
-    return pd.DataFrame(x_packetized), pd.Series(y_packetized)
+    # Convert to numpy
+    X = x.to_numpy(copy=False)
+    Y = y.to_numpy(copy=False)
+
+    if X.ndim != 2:
+        raise ValueError(f"Expected x to be 2D (n_rows, n_channels), got {X.shape}")
+    if Y.ndim != 1:
+        Y = Y.reshape(-1)
+    if len(X) != len(Y):
+        raise ValueError(f"x and y length mismatch: len(x)={len(X)} len(y)={len(Y)}")
+
+    n_rows, n_channels = X.shape
+    n_packets = n_rows // PACKET_SIZE
+    if n_packets == 0:
+        raise ValueError(f"Not enough rows ({n_rows}) for packet_size={PACKET_SIZE}")
+
+    # Trim remainder so reshape is clean
+    end = n_packets * PACKET_SIZE
+    X_trim = X[:end, :]
+    Y_trim = Y[:end]
+
+    # Reshape into packets: (n_packets, packet_size, n_channels)
+    X_packets = X_trim.reshape(n_packets, PACKET_SIZE, n_channels)
+
+    # Convert to (n_packets, n_channels, packet_size) for wavelet transformer
+    X_packets = np.transpose(X_packets, (0, 2, 1)).astype(np.float32, copy=False)
+
+    # Mode label per packet (robust, no scipy)
+    y_packets = np.empty((n_packets,), dtype=Y_trim.dtype)
+    for i in range(n_packets):
+        seg = Y_trim[i * PACKET_SIZE : (i + 1) * PACKET_SIZE]
+        vals, counts = np.unique(seg, return_counts=True)
+        y_packets[i] = vals[np.argmax(counts)]
+
+    return X_packets, y_packets
+
+def drop_leading_bad_rows(data: pd.DataFrame, label_col: str) -> pd.DataFrame:
+    """
+    Drops rows [0..k] where k is the first row index whose *feature columns* are all zeros.
+    If no such row exists, returns data unchanged.
+    """
+    feature_df = data.drop(columns=[label_col], errors="ignore")
+    feature_arr = feature_df.to_numpy()
+
+    all_zero_mask = (feature_arr == 0).all(axis=1)
+    if not np.any(all_zero_mask):
+        return data
+
+    first_zero_idx = int(np.argmax(all_zero_mask))  # safe because we checked any()
+    return data.iloc[first_zero_idx + 1 :].reset_index(drop=True)
 
 def debug_print_dataset_details(dataset: pd.DataFrame) -> None:
     lowest = dataset.iloc[0, 22]
