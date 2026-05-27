@@ -32,7 +32,7 @@ class SignalStreamer:
             inlet.flush()
             print("Connected to LSL stream:", eeg_streams[0].name())
             while not self._stop_signal:
-                samples, _ = inlet.pull_chunk(stream_timeout, int(PACKET_SIZE))
+                samples, _ = inlet.pull_chunk(stream_timeout, PACKET_SIZE)
                 signals = np.array(samples, dtype=np.float32)
                 
                 if signals.shape[0] > PACKET_SIZE:
@@ -44,7 +44,6 @@ class SignalStreamer:
                     if verbose:
                         print(f"[SIGNAL STREAMER] Warning: Received {signals.shape[0]} samples, expected {PACKET_SIZE}. Unable to correct.\n")
                 
-
                 signals = signals[:, :5]
                 self._signal_buffer.put(signals.T[None, :, :])
                 

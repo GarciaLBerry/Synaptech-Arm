@@ -1,8 +1,8 @@
 import joblib, sklearn, warnings
+from collections.abc import Sequence
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 
 from .config import default_pipelines_path, pipeline_prefix, version_prefix, version_width, default_cols, dropped_cols, PACKET_SIZE
@@ -70,17 +70,50 @@ def load_latest_pipeline(cwd: str | Path | None = None) -> Pipeline:
 
 
 ###### Data Loading and Formatting ######
-def get_data(dataset_path: str, label_col: str = "Marker Channel", test_size: float = 0.2, random_state: int = 42) -> list[np.ndarray]:
+def get_data(data_root: str, label_col: str = "Marker Channel", test_size: float = 0.2, random_state: int = 42) -> list[np.ndarray]:
+    dataset_paths = [path for path in Path(data_root).iterdir()]
+    packetized_datasets = [
+        packetize_data_from_file(dataset_path, label_col)
+        for dataset_path in dataset_paths
+    ]
+    
+    packet_counts = [len(y) for _, y in packetized_datasets]
+    test_indices = _choose_test_file_indices(packet_counts, test_size, random_state)
+    test_index_set = set(test_indices)
+
+    x_train_parts = [
+        x for i, (x, _) in enumerate(packetized_datasets)
+        if i not in test_index_set
+    ]
+    y_train_parts = [
+        y for i, (_, y) in enumerate(packetized_datasets)
+        if i not in test_index_set
+    ]
+    x_test_parts = [
+        x for i, (x, _) in enumerate(packetized_datasets)
+        if i in test_index_set
+    ]
+    y_test_parts = [
+        y for i, (_, y) in enumerate(packetized_datasets)
+        if i in test_index_set
+    ]
+
+    return [
+        np.concatenate(x_train_parts, axis=0),
+        np.concatenate(x_test_parts, axis=0),
+        np.concatenate(y_train_parts, axis=0),
+        np.concatenate(y_test_parts, axis=0),
+    ]
+
+def packetize_data_from_file(dataset_path: str | Path, label_col: str = "Marker Channel") -> tuple[np.ndarray, np.ndarray]:
     data = read_dataset_from_csv(dataset_path)
     data = format_csv_data(data)
     data = drop_leading_bad_rows(data, label_col)
     x = data.drop(columns=[label_col])
-    y = data[label_col]
-    y = extend_labels(data)
-    x, y = packetize_data(x, y)
-    return train_test_split(x, y, test_size=test_size, random_state=random_state)
+    y = extend_labels(data, label_col)
+    return packetize_data(x, y)
 
-def read_dataset_from_csv(filePath: str) -> pd.DataFrame:
+def read_dataset_from_csv(filePath: str | Path) -> pd.DataFrame:
     return pd.read_csv(filePath, sep="\t", header=None)
 
 def format_csv_data(data: pd.DataFrame) -> pd.DataFrame:
@@ -92,13 +125,12 @@ def format_csv_data(data: pd.DataFrame) -> pd.DataFrame:
     data = data.drop(dropped_cols, axis=1)
     return data
 
-def extend_labels(data: pd.DataFrame) -> pd.Series:
-    column_name = "Marker Channel"
-    new_column = data[column_name].copy()
+def extend_labels(data: pd.DataFrame, label_col: str = "Marker Channel") -> pd.Series:
+    new_column = data[label_col].copy()
     
     current_overwrite = 2
     for i in range(len(data)):
-        current_value = data[column_name].iloc[i]
+        current_value = data[label_col].iloc[i]
         
         # Check if the current value is non-zero
         if current_value == 0:
@@ -107,8 +139,6 @@ def extend_labels(data: pd.DataFrame) -> pd.Series:
         else:
             current_overwrite = current_value
             
-    # Assign the new column back to the DataFrame
-    #data[column_name] = new_column
     return new_column
 
 def packetize_data(x: pd.DataFrame, y: pd.Series) -> tuple[np.ndarray, np.ndarray]:
@@ -162,18 +192,68 @@ def packetize_data(x: pd.DataFrame, y: pd.Series) -> tuple[np.ndarray, np.ndarra
 
 def drop_leading_bad_rows(data: pd.DataFrame, label_col: str) -> pd.DataFrame:
     """
-    Drops rows [0..k] where k is the first row index whose *feature columns* are all zeros.
+    Drops rows [0..k] where k is the first row index within the first 10 rows
+    whose first feature column value is zero.
     If no such row exists, returns data unchanged.
     """
     feature_df = data.drop(columns=[label_col], errors="ignore")
     feature_arr = feature_df.to_numpy()
 
-    all_zero_mask = (feature_arr == 0).all(axis=1)
-    if not np.any(all_zero_mask):
+    zero_idxs = np.where(feature_arr[:10, 0] == 0)[0]
+    if zero_idxs.size == 0:
         return data
-
-    first_zero_idx = int(np.argmax(all_zero_mask))  # safe because we checked any()
+    
+    first_zero_idx = int(zero_idxs[0])
     return data.iloc[first_zero_idx + 1 :].reset_index(drop=True)
+
+def _choose_test_file_indices(packet_counts: list[int], test_size: float, random_state: int) -> list[int]:
+    """
+    Chooses whole source files for the test split, minimizing packet-count drift
+    from the requested test_size without splitting any source file.
+    """
+    if not 0 < test_size < 1:
+        raise ValueError(f"test_size must be between 0 and 1, got {test_size}")
+
+    n_files = len(packet_counts)
+    if n_files < 2:
+        raise ValueError(
+            "At least two dataset files are required to split without leaking packets from the same file."
+        )
+
+    total_packets = sum(packet_counts)
+    target_packets = total_packets * test_size
+    rng = np.random.default_rng(random_state)
+    shuffled_indices = list(rng.permutation(n_files))
+
+    reachable: dict[int, int] = {0: 0}
+    for file_index in shuffled_indices:
+        packet_count = packet_counts[file_index]
+        for packet_sum, mask in list(reachable.items()):
+            new_sum = packet_sum + packet_count
+            if new_sum not in reachable:
+                reachable[new_sum] = mask | (1 << file_index)
+
+    candidates = [
+        (packet_sum, mask)
+        for packet_sum, mask in reachable.items()
+        if packet_sum not in (0, total_packets)
+    ]
+    if len(candidates) == 0:
+        raise ValueError("Could not build a non-empty train/test split from the dataset files.")
+
+    _, best_mask = min(
+        candidates,
+        key=lambda candidate: (
+            abs(candidate[0] - target_packets),
+            abs(candidate[0] / total_packets - test_size),
+        ),
+    )
+
+    return [
+        file_index
+        for file_index in range(n_files)
+        if best_mask & (1 << file_index)
+    ]
 
 def debug_print_dataset_details(dataset: pd.DataFrame) -> None:
     lowest = dataset.iloc[0, 22]
