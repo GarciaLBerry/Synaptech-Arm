@@ -1,4 +1,4 @@
-from cProfile import label
+from pathlib import Path
 
 from sklearn.linear_model import LogisticRegression
 from scipy.stats import  loguniform, uniform, randint
@@ -6,7 +6,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from preprocessing.custom_transformers import WaveletTransformer
 
-dataset_path = "Evo_Initial_BCI_Data/2026-27-01_Evo_Run04_FiveSets_Gain12.csv"
+data_root: str = str((Path(__file__).parent.parent / "data").resolve())
+dataset_path: str = "Evo_Initial_BCI_Data/2026-27-01_Evo_Run04_FiveSets_Gain12.csv"
 
 prediction_mapping = {
     1: "DOWN",
@@ -14,7 +15,7 @@ prediction_mapping = {
     3:  "UP"
 }
 
-label_col = "Marker Channel"
+label_col: str = "Marker Channel"
 
 default_cols = {
     0: "Sample Index",
@@ -83,20 +84,20 @@ param_dist = {
 pipeline: Pipeline = Pipeline([
     ("wave", WaveletTransformer()),
     ("scaler", StandardScaler()),
-    ("model", LogisticRegression(solver="saga", tol=1e-3))
+    ("model", LogisticRegression(solver="saga", tol=2e-4, class_weight="balanced"))
 ])
 
 default_pipelines_path: str = "./model/pipelines"
 version_prefix: str = "version="
 version_width: int = 3
-pipeline_prefix = "pipeline_v"
+pipeline_prefix: str = "pipeline_v"
 
 #----------- main globals -----------#
 # Seconds without recieving signal to automatically exit.
-MAIN_LOOP_TIMEOUT = 30
+MAIN_LOOP_TIMEOUT: int = 30
 # Seconds in between loops
-MAIN_LOOP_DELAY = 0.25
+MAIN_LOOP_DELAY: float = 0.25
 
 #----------- signal globals -----------#
 # Rows in each packet
-PACKET_SIZE = 250
+PACKET_SIZE: int = 250
