@@ -1,11 +1,23 @@
 import joblib, sklearn, warnings
-from collections.abc import Sequence
 from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.pipeline import Pipeline
 
-from .config import default_pipelines_path, pipeline_prefix, version_prefix, version_width, default_cols, dropped_cols, PACKET_SIZE
+from .config import (
+    default_pipelines_path,
+    pipeline_prefix,
+    version_prefix,
+    version_width,
+    default_cols,
+    dropped_cols,
+    label_col,
+    PACKET_SIZE,
+    PACKET_STRIDE,
+    SAMPLE_RATE,
+    DROP_TRANSITIONS,
+    LABEL_TRANSITIONS
+)
 
 ###### pipeline Saveing I/O ######
 def save_pipeline(
@@ -70,48 +82,171 @@ def load_latest_pipeline(cwd: str | Path | None = None) -> Pipeline:
 
 
 ###### Data Loading and Formatting ######
-def get_data(data_root: str, label_col: str = "Marker Channel", test_size: float = 0.2, random_state: int = 42) -> list[np.ndarray]:
-    dataset_paths = [path for path in Path(data_root).iterdir()]
-    packetized_datasets = [
-        packetize_data_from_file(dataset_path, label_col)
-        for dataset_path in dataset_paths
-    ]
-    
-    packet_counts = [len(y) for _, y in packetized_datasets]
-    test_indices = _choose_test_file_indices(packet_counts, test_size, random_state)
-    test_index_set = set(test_indices)
+def get_data(
+    data_root: str,
+    test_size: float = 0.5,
+    random_state: int = 42,
+    n_groups: int = 12,
+) -> list[np.ndarray]:
+    """
+    Loads recording-level assignments from ``train`` and ``test`` directories.
+    CSVs left directly under data_root are split at state transitions or
+    10-second boundaries, packetized, and assigned to improve the overall
+    train/test class balance.
 
-    x_train_parts = [
-        x for i, (x, _) in enumerate(packetized_datasets)
-        if i not in test_index_set
-    ]
-    y_train_parts = [
-        y for i, (_, y) in enumerate(packetized_datasets)
-        if i not in test_index_set
-    ]
-    x_test_parts = [
-        x for i, (x, _) in enumerate(packetized_datasets)
-        if i in test_index_set
-    ]
-    y_test_parts = [
-        y for i, (_, y) in enumerate(packetized_datasets)
-        if i in test_index_set
-    ]
+    ``n_groups`` is retained for compatibility with older callers.
+    """
+    del n_groups
+    root = Path(data_root)
+    split_parts = {"train": [], "test": []}
+    next_group = 0
+
+    for split_name in ("train", "test"):
+        for dataset_path in _csv_paths(root / split_name):
+            data = prepare_data_from_file(dataset_path)
+            x, y = packetize_prepared_data(
+                data,
+                drop_transitions=DROP_TRANSITIONS and split_name == "train",
+            )
+            split_parts[split_name].append((x, y, next_group))
+            next_group += 1
+
+    unassigned_parts = []
+    max_chunk_rows = SAMPLE_RATE * 10
+    for dataset_path in _csv_paths(root):
+        data = prepare_data_from_file(dataset_path)
+        for chunk in _split_at_transitions_and_max_rows(data, max_chunk_rows):
+            if len(chunk) < PACKET_SIZE:
+                continue
+            x, y = packetize_prepared_data(chunk, drop_transitions=False)
+            if len(y) == 0:
+                continue
+            unassigned_parts.append((x, y, next_group))
+            next_group += 1
+
+    assignments = _assign_packetized_chunks(
+        split_parts,
+        unassigned_parts,
+        test_size,
+        random_state,
+    )
+    for part, split_name in zip(unassigned_parts, assignments):
+        split_parts[split_name].append(part)
+
+    x_train_parts, y_train_parts, groups_train_parts = _unpack_split_parts(
+        split_parts["train"]
+    )
+    x_test_parts, y_test_parts, groups_test_parts = _unpack_split_parts(
+        split_parts["test"]
+    )
 
     return [
         np.concatenate(x_train_parts, axis=0),
         np.concatenate(x_test_parts, axis=0),
         np.concatenate(y_train_parts, axis=0),
         np.concatenate(y_test_parts, axis=0),
+        np.concatenate(groups_train_parts, axis=0),
+        np.concatenate(groups_test_parts, axis=0),
     ]
 
-def packetize_data_from_file(dataset_path: str | Path, label_col: str = "Marker Channel") -> tuple[np.ndarray, np.ndarray]:
+def _csv_paths(directory: Path) -> list[Path]:
+    return sorted(
+        path for path in directory.iterdir()
+        if path.is_file() and path.suffix.lower() == ".csv"
+    )
+
+def _split_at_transitions_and_max_rows(
+    data: pd.DataFrame,
+    max_rows: int,
+) -> list[pd.DataFrame]:
+    labels = data[label_col].to_numpy(copy=False)
+    transition_indices = np.flatnonzero(labels[1:] != labels[:-1]) + 1
+    state_boundaries = np.r_[0, transition_indices, len(data)]
+    chunks = []
+
+    for state_start, state_end in zip(state_boundaries[:-1], state_boundaries[1:]):
+        for chunk_start in range(state_start, state_end, max_rows):
+            chunk_end = min(chunk_start + max_rows, state_end)
+            chunks.append(data.iloc[chunk_start:chunk_end].reset_index(drop=True))
+    return chunks
+
+def _assign_packetized_chunks(
+    split_parts: dict[str, list[tuple[np.ndarray, np.ndarray, int]]],
+    chunks: list[tuple[np.ndarray, np.ndarray, int]],
+    test_size: float,
+    random_state: int,
+) -> list[str]:
+    if not 0 < test_size < 1:
+        raise ValueError(f"test_size must be between 0 and 1, got {test_size}")
+    if not chunks:
+        return []
+
+    labels = sorted({
+        label
+        for parts in [*split_parts.values(), chunks]
+        for _, y, _ in parts
+        for label in np.unique(y)
+    })
+    label_to_index = {label: index for index, label in enumerate(labels)}
+
+    def counts(parts):
+        result = np.zeros(len(labels), dtype=int)
+        for _, y, _ in parts:
+            for label, count in zip(*np.unique(y, return_counts=True)):
+                result[label_to_index[label]] += count
+        return result
+
+    train_counts = counts(split_parts["train"])
+    test_counts = counts(split_parts["test"])
+    chunk_counts = [counts([chunk]) for chunk in chunks]
+    total_counts = train_counts + test_counts + np.sum(chunk_counts, axis=0)
+    target_test_counts = total_counts * test_size
+    target_test_total = total_counts.sum() * test_size
+
+    def score(candidate_test_counts):
+        class_error = np.mean(
+            ((candidate_test_counts - target_test_counts) / np.maximum(total_counts, 1))
+            ** 2
+        )
+        total_error = (
+            (candidate_test_counts.sum() - target_test_total)
+            / max(total_counts.sum(), 1)
+        ) ** 2
+        return class_error + total_error
+
+    rng = np.random.default_rng(random_state)
+    order = list(rng.permutation(len(chunks)))
+    order.sort(key=lambda index: len(chunks[index][1]), reverse=True)
+    assignments = ["train"] * len(chunks)
+    current_test_counts = test_counts.copy()
+    for index in order:
+        if score(current_test_counts + chunk_counts[index]) < score(current_test_counts):
+            assignments[index] = "test"
+            current_test_counts += chunk_counts[index]
+    return assignments
+
+def _unpack_split_parts(parts):
+    return (
+        [x for x, _, _ in parts],
+        [y for _, y, _ in parts],
+        [np.full(len(y), group) for _, y, group in parts],
+    )
+
+def prepare_data_from_file(dataset_path: str | Path) -> pd.DataFrame:
     data = read_dataset_from_csv(dataset_path)
     data = format_csv_data(data)
-    data = drop_leading_bad_rows(data, label_col)
+    data = drop_leading_bad_rows(data)
+    data = repair_zero_rows(data)
+    data[label_col] = extend_labels(data)
+    return data
+
+def packetize_prepared_data(
+    data: pd.DataFrame,
+    drop_transitions: bool = DROP_TRANSITIONS,
+) -> tuple[np.ndarray, np.ndarray]:
     x = data.drop(columns=[label_col])
-    y = extend_labels(data, label_col)
-    return packetize_data(x, y)
+    y = data[label_col]
+    return packetize_data(x, y, drop_transitions=drop_transitions)
 
 def read_dataset_from_csv(filePath: str | Path) -> pd.DataFrame:
     return pd.read_csv(filePath, sep="\t", header=None)
@@ -125,7 +260,7 @@ def format_csv_data(data: pd.DataFrame) -> pd.DataFrame:
     data = data.drop(dropped_cols, axis=1)
     return data
 
-def extend_labels(data: pd.DataFrame, label_col: str = "Marker Channel") -> pd.Series:
+def extend_labels(data: pd.DataFrame) -> pd.Series:
     new_column = data[label_col].copy()
     
     current_overwrite = 2
@@ -141,56 +276,55 @@ def extend_labels(data: pd.DataFrame, label_col: str = "Marker Channel") -> pd.S
             
     return new_column
 
-def packetize_data(x: pd.DataFrame, y: pd.Series) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Partitions the input data into packets of a specified size.
-    Args:
-        x (pd.DataFrame): The input features DataFrame.
-        y (pd.Series): The labels Series corresponding to the input features.
-        packet_size (int, optional): The size of each packet. Defaults to window_size.
-
-    Returns:
-        tuple[np.ndarray, np.ndarray]: The packetized data.
-        The first element is an array where each row corresponds to a packet of features, which is a flattened version of the original features in that packet.
-        The second element is an array where each entry corresponds to the label for the respective packet, which is the most common label in that packet.
-    """
-    # Convert to numpy
+def packetize_data(
+    x: pd.DataFrame,
+    y: pd.Series,
+    drop_transitions: bool = DROP_TRANSITIONS,
+) -> tuple[np.ndarray, np.ndarray]:
     X = x.to_numpy(copy=False)
     Y = y.to_numpy(copy=False)
-
-    if X.ndim != 2:
-        raise ValueError(f"Expected x to be 2D (n_rows, n_channels), got {X.shape}")
-    if Y.ndim != 1:
-        Y = Y.reshape(-1)
+    
     if len(X) != len(Y):
         raise ValueError(f"x and y length mismatch: len(x)={len(X)} len(y)={len(Y)}")
 
     n_rows, n_channels = X.shape
-    n_packets = n_rows // PACKET_SIZE
-    if n_packets == 0:
+    if n_rows < PACKET_SIZE:
         raise ValueError(f"Not enough rows ({n_rows}) for packet_size={PACKET_SIZE}")
 
-    # Trim remainder so reshape is clean
-    end = n_packets * PACKET_SIZE
-    X_trim = X[:end, :]
-    Y_trim = Y[:end]
+    x_packets = []
+    y_packets = []
 
-    # Reshape into packets: (n_packets, packet_size, n_channels)
-    X_packets = X_trim.reshape(n_packets, PACKET_SIZE, n_channels)
+    for start in range(0, n_rows - PACKET_SIZE + 1, PACKET_STRIDE):
+        end = start + PACKET_SIZE
 
-    # Convert to (n_packets, n_channels, packet_size) for wavelet transformer
-    X_packets = np.transpose(X_packets, (0, 2, 1)).astype(np.float32, copy=False)
+        x_seg = X[start:end, :]
+        y_seg = Y[start:end]
 
-    # Mode label per packet (robust, no scipy)
-    y_packets = np.empty((n_packets,), dtype=Y_trim.dtype)
-    for i in range(n_packets):
-        seg = Y_trim[i * PACKET_SIZE : (i + 1) * PACKET_SIZE]
-        vals, counts = np.unique(seg, return_counts=True)
-        y_packets[i] = vals[np.argmax(counts)]
+        # Experiment to see if keeping things more reflective of the movement vs resting helps or hinders.
+        packet_label = y_seg[-1] if y_seg[-1] != 2 else y_seg[0]
+        
+        if not np.all(y_seg == packet_label):
+            if drop_transitions:
+                continue
+            elif LABEL_TRANSITIONS:
+                y_packets.append(4)
 
-    return X_packets, y_packets
+        if not LABEL_TRANSITIONS:
+            y_packets.append(packet_label)
 
-def drop_leading_bad_rows(data: pd.DataFrame, label_col: str) -> pd.DataFrame:
+        # Convert from (packet_size, channels) to (channels, packet_size)
+        x_packets.append(x_seg.T.astype(np.float32, copy=False))
+
+    if not x_packets:
+        return (
+            np.empty((0, n_channels, PACKET_SIZE), dtype=np.float32),
+            np.empty((0,), dtype=Y.dtype),
+        )
+
+    return np.asarray(x_packets), np.asarray(y_packets)
+
+
+def drop_leading_bad_rows(data: pd.DataFrame) -> pd.DataFrame:
     """
     Drops rows [0..k] where k is the first row index within the first 10 rows
     whose first feature column value is zero.
@@ -205,6 +339,74 @@ def drop_leading_bad_rows(data: pd.DataFrame, label_col: str) -> pd.DataFrame:
     
     first_zero_idx = int(zero_idxs[0])
     return data.iloc[first_zero_idx + 1 :].reset_index(drop=True)
+
+def repair_zero_rows(data: pd.DataFrame) -> pd.DataFrame:
+    repaired = data.copy()
+
+    zero_check_cols = repaired.columns[:5]
+
+    zero_rows = (repaired[zero_check_cols] == 0).all(axis=1)
+
+    repaired.loc[zero_rows, zero_check_cols] = np.nan
+    repaired[zero_check_cols] = repaired[zero_check_cols].interpolate(method="linear")
+
+    return repaired
+
+def _allocate_chunks_per_file(row_counts: list[int], n_groups: int) -> list[int]:
+    """
+    Allocates exactly n_groups contiguous chunks across source files while
+    keeping the resulting chunk row counts as similar as possible.
+    """
+    if len(row_counts) == 0:
+        raise ValueError("At least one dataset file is required.")
+    if any(row_count <= 0 for row_count in row_counts):
+        raise ValueError(f"Dataset files must contain rows, got row counts: {row_counts}")
+    if n_groups < len(row_counts):
+        raise ValueError(
+            f"n_groups={n_groups} must be at least the number of dataset files "
+            f"({len(row_counts)}) so every file is represented."
+        )
+    if n_groups > sum(row_counts):
+        raise ValueError(
+            f"n_groups={n_groups} cannot exceed the total number of rows "
+            f"({sum(row_counts)})."
+        )
+
+    target_rows = sum(row_counts) / n_groups
+    chunks_per_file = [1] * len(row_counts)
+
+    for _ in range(n_groups - len(row_counts)):
+        best_file_index = min(
+            range(len(row_counts)),
+            key=lambda file_index: _chunk_allocation_error(
+                row_counts[file_index],
+                chunks_per_file[file_index] + 1,
+                target_rows,
+            ) - _chunk_allocation_error(
+                row_counts[file_index],
+                chunks_per_file[file_index],
+                target_rows,
+            ),
+        )
+        chunks_per_file[best_file_index] += 1
+
+    return chunks_per_file
+
+def _chunk_allocation_error(row_count: int, chunk_count: int, target_rows: float) -> float:
+    chunk_rows = row_count / chunk_count
+    return chunk_count * (chunk_rows - target_rows) ** 2
+
+def _split_data_into_chunks(data: pd.DataFrame, chunk_count: int) -> list[pd.DataFrame]:
+    row_indices = np.array_split(np.arange(len(data)), chunk_count)
+    return [
+        data.iloc[indices].reset_index(drop=True)
+        for indices in row_indices
+    ]
+
+def _count_possible_packets(row_count: int) -> int:
+    if row_count < PACKET_SIZE:
+        return 0
+    return ((row_count - PACKET_SIZE) // PACKET_STRIDE) + 1
 
 def _choose_test_file_indices(packet_counts: list[int], test_size: float, random_state: int) -> list[int]:
     """

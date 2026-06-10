@@ -4,20 +4,20 @@ import numpy as np
 import pandas as pd
 
 from pylsl import resolve_streams, StreamInlet
-from model.config import PACKET_SIZE, core_cols
+from model.config import SAMPLE_RATE, PACKET_SIZE, PACKET_STRIDE, core_cols
 
-SAMPLE_RATE = 250
-CHANNEL_NUM = 8
 MODEL_CHANNEL_NUM = len(core_cols)
 
-packet_duration = SAMPLE_RATE / PACKET_SIZE
-stream_timeout = packet_duration + 0.01
-signal_buffer_get_timeout = packet_duration * 0.1
+packet_duration = PACKET_SIZE / SAMPLE_RATE
+sample_delay = PACKET_STRIDE / SAMPLE_RATE
+stream_timeout = sample_delay + 0.01
+signal_buffer_get_timeout = sample_delay * 0.1
 
 verbose = False
 
 class SignalStreamer:
     _signal_buffer = queue.SimpleQueue()
+    _packet_buffer: np.ndarray | None = None
     _stop_signal = False
     
     def start_streaming(self):
@@ -32,20 +32,27 @@ class SignalStreamer:
             inlet.flush()
             print("Connected to LSL stream:", eeg_streams[0].name())
             while not self._stop_signal:
-                samples, _ = inlet.pull_chunk(stream_timeout, PACKET_SIZE)
+                samples, _ = inlet.pull_chunk(stream_timeout, PACKET_STRIDE)
                 signals = np.array(samples, dtype=np.float32)
                 
-                if signals.shape[0] > PACKET_SIZE:
+                if signals.shape[0] > PACKET_STRIDE:
                     if verbose:
-                        print(f"[SIGNAL STREAMER] Warning: Received {signals.shape[0]} samples, expected {PACKET_SIZE}. Trimming to expected size.\n")
-                    signals = signals[:PACKET_SIZE, :]
+                        print(f"[SIGNAL STREAMER] Warning: Received {signals.shape[0]} samples, expected {PACKET_STRIDE}\n")
                 
-                if signals.shape[0] < PACKET_SIZE:
+                if signals.shape[0] < PACKET_STRIDE:
                     if verbose:
-                        print(f"[SIGNAL STREAMER] Warning: Received {signals.shape[0]} samples, expected {PACKET_SIZE}. Unable to correct.\n")
+                        print(f"[SIGNAL STREAMER] Warning: Received {signals.shape[0]} samples, expected {PACKET_STRIDE}.\n")
                 
-                signals = signals[:, :5]
-                self._signal_buffer.put(signals.T[None, :, :])
+                signals = signals[:, :MODEL_CHANNEL_NUM]
+                
+                if self._packet_buffer is None:
+                    self._packet_buffer = signals.T
+                else:
+                    self._packet_buffer = np.concatenate((self._packet_buffer, signals.T), axis=1)
+                    
+                while self._packet_buffer.shape[1] >= PACKET_SIZE:
+                    self._signal_buffer.put(self._packet_buffer[:, :PACKET_SIZE][None, :, :])
+                    self._packet_buffer = self._packet_buffer[:, PACKET_STRIDE:]
                 
         except KeyboardInterrupt:
             # This catches Ctrl+C/Cmd+C gracefully

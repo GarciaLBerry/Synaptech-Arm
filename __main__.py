@@ -3,7 +3,7 @@ from pathlib import Path
 from model.inference import predict
 import signal_streamer as ss
 import numpy as np
-from model import prediction_mapping
+from model import LABEL_MAPPING
 from model.config import MAIN_LOOP_DELAY, MAIN_LOOP_TIMEOUT
 
 def main():
@@ -34,10 +34,10 @@ def main():
 
                 
                 # 5. Placeholder: Translate and print output
-                if result not in prediction_mapping:
+                if result not in LABEL_MAPPING:
                     display_text = "UNKNOWN SIGNAL"
                 else:
-                    display_text = prediction_mapping[result]
+                    display_text = LABEL_MAPPING[result]
 
                 status = f"Action: {display_text}; Timeout: [{timeout_counter}]"
                 print(status.ljust(shutil.get_terminal_size().columns), end='\r', flush=True)
