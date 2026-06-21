@@ -43,13 +43,8 @@ class FactorAnalysisTransformer(BaseEstimator, TransformerMixin):
             rotation=self.rotation,
             random_state=self.random_state,
         )
-        target_features = X
-        if self.n_energy_details > 0:
-            energy_features = X[:,:self.n_energy_details]
-            target_features = X[:,self.n_energy_details:]
-            
-        
-        self.model_.fit(target_features, y)
+        target, _ = self._split_features(X)
+        self.model_.fit(target, y)
 
         self.components_ = self.model_.components_
         self.mean_ = self.model_.mean_
@@ -59,22 +54,30 @@ class FactorAnalysisTransformer(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
-        energy_features = X[:,:self.n_energy_details]
-        target_features = X[:,self.n_energy_details:]
+        target, energy = self._split_features(X)
             
-        z = self.model_.transform(target_features)
+        z = self.model_.transform(target)
         
         if self.append_latents:
-            return np.hstack([energy_features, z])
+            return np.hstack([energy, z])
 
-        return energy_features
+        return energy
 
     def transform_latent(self, X):
-        target_features = X
-        if self.n_energy_details > 0:
-            target_features = X[:,self.n_energy_details:]
+        _, target_features = self._split_features(X)
             
         return self.model_.transform(target_features)
+    
+    def _split_features(self, X):
+        if self.n_energy_details <= 0:
+            return X, X
+        energy_features = X[:,:self.n_energy_details]
+        target_features = X[:,self.n_energy_details:]
+        
+        if X.shape[1] <= self.n_energy_details + 10:
+            target_features = energy_features
+        
+        return energy_features, target_features
     
     
 class SensorTiedFactorAnalysisTransformer(BaseEstimator, TransformerMixin):
